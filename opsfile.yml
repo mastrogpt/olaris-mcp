@@ -1,0 +1,244 @@
+version: 3
+
+env:
+  KUBECONFIG:
+    sh: |
+      if test -e $OPS_TMP/kubeconfig
+      then echo  $OPS_TMP/kubeconfig
+      else echo ~/.kube/config
+      fi  
+
+tasks:
+  generate:
+    desc: generate code for an MCP server
+    dir: mcproxy
+    interactive: true
+    silent: true
+    env:
+      PYTHONUBUFFERED: 1
+    cmds:
+      - |
+        echo "Generating MCP server for package: {{._package_}}"
+      - uv python install 3.12
+      - if ! test -d .venv ; then uv venv --python 3.12 ; fi
+      - uv run python generator.py {{._package_}}
+
+  install:
+    desc: install or uninstall an MCP local server
+    silent: true
+    dir: mcproxy
+    cmds:
+      - task: generate
+        vars: {PACKAGE: "{{._package_}}"}
+      - uv run install.py "{{._package_}}" "{{.__uninstall}}" "{{.__cursor}}" "{{.__claude}}" "{{.__5ire}}" "{{.__sse}}"
+  
+
+  run:
+    desc: mcp
+    dir: mcproxy
+    interactive: true
+    silent: true
+    env:
+      PYTHONUBUFFERED: 1
+    cmds:
+      - task: generate
+        vars: {PACKAGE: "{{._package_}}"}
+      - |
+        if ! {{.__sse}}
+        then 
+            uv run --with mcp mcp run "$($OPS -opspath $PWD/_svr/{{._package_}}.py)"
+        else
+            SSE=1 uv run "$($OPS -opspath $PWD/_svr/{{._package_}}.py)"
+        fi 
+
+  test-kube:
+    desc: test kubeconfig
+    silent: true
+    cmds:
+      - |
+        OPERATOR_VERSION=$(kubectl -n nuvolaris get cm/config -o yaml | rg "nuvolaris-operator_version:" | rg -o ':[^:]+$' | sed 's/^://' )
+        if [ $? -eq 0 ] && [ -n "$OPERATOR_VERSION" ]; then
+          echo "Nuvolaris is running with Operator version: $OPERATOR_VERSION"
+        else
+          echo "Failed to access Nuvolaris namespace. Do you have a valid kubeconfig?" && exit 1
+        fi
+  
+  test-auth:
+    desc: test authentication
+    silent: true
+    cmds:
+      - |
+        if ! test -f ~/.wskprops
+        then
+          echo "No authentication found in ~/.wskprops, please set it up first." && exit 1
+        fi
+     
+  test:
+    desc: "test a generated mcp server"
+    dir: mcproxy
+    interactive: true
+    silent: true
+    env:
+      APIHOST:
+        sh: |
+          if test -n "$OPSDEV_APIHOST"
+          then
+            echo "$OPSDEV_APIHOST"
+          else
+            echo "http://localhost:80"
+          fi
+    cmds:
+      - task: test-auth
+      - test -n "$OPSDEV_USERNAME" || (echo "Please perform an ops ide login first." && exit 1)
+      - test -n "$OPSDEV_APIHOST" || (echo "Please perform an ops ide login first." && exit 1)
+      - uv python install 3.12
+      - if ! test -d .venv ; then uv venv --python 3.12 ; fi
+      - uv run python generator.py {{._package_}} {{.__sample}}
+      - echo "NAMESPACE will be $OPSDEV_USERNAME"
+      - echo "APIHOST will be $APIHOST"
+      - echo "AUTH will be $AUTH"
+      - echo "Generated " "($OPS -opspath $PWD/_svr/{{._package_}}.py)"
+      - echo "Config    " "($OPS -opspath $PWD/_svr/{{._package_}}.json)"
+      - |
+        if ! {{.__norun}}
+        then 
+            echo "Log       " "$($OPS -opspath _svr/{{._package_}}.log)"
+            bun x @wong2/mcp-cli --pass-env --config "_svr/{{._package_}}.json"
+        fi
+  
+
+  _kill-existing-inspector:
+    desc: "kill existing inspector"
+    silent: true
+    ignore_error: true
+    cmds:
+      - bun x find-process -t name "@modelcontextprotocol/inspector" | rg 'pid' | awk '{ print $2 }' | xargs -r kill
+
+  inspect:
+    desc: "inspect a generated mcp server"
+    dir: mcproxy
+    interactive: true
+    silent: true
+    cmds: 
+      - test -n "$OPSDEV_USERNAME" || (echo "Please perform an ops ide login first." && exit 1)
+      - test -n "$OPSDEV_APIHOST" || (echo "Please perform an ops ide login first." && exit 1)
+      - bun install
+      - task: _kill-existing-inspector
+      - | 
+        if ! {{.__sse}}
+        then
+          CONFIG="$($OPS -opspath $PWD/_svr/{{._package_}}.json)"
+          bun run mcp-inspector --config $CONFIG --server {{._package_}}
+        else
+          bun run mcp-inspector
+        fi
+  sse:
+    desc: Install or uninstall an MCP SSE server inside Nuvolaris
+    silent: true
+    interactive: true
+    dir: mcproxy
+    env:
+      SRV_PATH:
+        sh: |
+          P=$($OPS -opspath $PWD/_svr/{{._package_}}.py)
+          echo $P
+      AUTH:
+        sh: |
+          AUTH=$(cat ~/.wskprops | grep "AUTH" | cut -d'=' -f2)
+          echo $AUTH
+      CONTROLLER:
+        sh: |
+          PORT=$(kubectl -n nuvolaris get service/controller -o jsonpath='{.spec.ports[0].port}')
+          echo "http://controller:$PORT"
+      PACKAGE:
+        sh: |
+          echo "{{._package_}}"
+      IMAGE_TAG:
+        sh: |
+          kubectl get cm/openwhisk-runtimes -o jsonpath='{.data.runtimes\.json}' \
+          | jq -r '.runtimes.python[] | select(.kind == "python:3.13") | .image.tag' \
+          | sed -E 's/.*-([0-9]+)$/\1/'
+      HOSTNAME:
+        sh: |
+          if test -n "{{._hostname}}"
+          then
+            echo "{{._hostname}}"
+          else
+            echo "mcp-{{._package_}}.traefik.me"
+          fi          
+    cmds:
+      - task: test-kube
+      - task: test-auth
+      - |
+        if ! {{.__uninstall}}
+        then
+          test -f $SRV_PATH || (echo "MCP Server script not found: $SRV_PATH" && exit 1)
+          test -n "$OPSDEV_USERNAME" || (echo "Please perform an ops ide login first." && exit 1)
+          test -n "$OPSDEV_APIHOST" || (echo "Please perform an ops ide login first." && exit 1)
+          ops a41 mcp generate {{._package_}}
+          echo "Generating MCP server for package: $PACKAGE AND hostname: $HOSTNAME"
+
+          # secret
+          kubectl -n nuvolaris create secret generic mcp-{{._package_}}-sse-secret \
+            --from-literal=AUTH="$AUTH" \
+            --from-literal=APIHOST="$CONTROLLER" \
+            --from-literal=OPSDEV_USERNAME="$OPSDEV_USERNAME" \
+            --dry-run=client -o yaml | kubectl -n nuvolaris apply -f -              
+          
+          # configmap
+          kubectl -n nuvolaris create configmap mcp-{{._package_}}-sse-script \
+            --from-file={{._package_}}.py=$SRV_PATH \
+            --dry-run=client -o yaml | kubectl -n nuvolaris apply -f -          
+          
+          # deployment
+          envsubst -i kubernetes/deployment.yaml -o kubernetes/_deployment.yaml
+          kubectl -n nuvolaris apply -f kubernetes/_deployment.yaml     
+          
+          # service
+          envsubst -i kubernetes/service.yaml -o kubernetes/_service.yaml
+          kubectl -n nuvolaris apply -f kubernetes/_service.yaml
+          
+          # ingress
+          if [ $STATUS_LAST = "devcluster" ];
+          then
+            envsubst -i kubernetes/ingress-nginx.yaml -o kubernetes/_ingress-nginx.yaml
+            kubectl -n nuvolaris apply -f kubernetes/_ingress-nginx.yaml
+          else
+            envsubst -i kubernetes/ingress-traefik -o kubernetes/_ingress-traefik.yaml
+            kubectl -n nuvolaris apply -f kubernetes/_ingress-traefik.yaml
+          fi               
+          
+        else
+          (kubectl -n nuvolaris get secret mcp-{{._package_}}-sse-secret >/dev/null 2>&1 && kubectl -n nuvolaris delete secret mcp-{{._package_}}-sse-secret) || true
+          (kubectl -n nuvolaris get configmap mcp-{{._package_}}-sse-script >/dev/null 2>&1 && kubectl -n nuvolaris delete configmap mcp-{{._package_}}-sse-script) || true
+          (kubectl -n nuvolaris get deployment mcp-{{._package_}}-sse-deployment >/dev/null 2>&1 && kubectl -n nuvolaris delete deployment mcp-{{._package_}}-sse-deployment) || true
+          (kubectl -n nuvolaris get service mcp-{{._package_}}-sse-service >/dev/null 2>&1 && kubectl -n nuvolaris delete service mcp-{{._package_}}-sse-service) || true
+          (kubectl -n nuvolaris get ingress mcp-{{._package_}}-sse-ingress >/dev/null 2>&1 && kubectl -n nuvolaris delete ingress mcp-{{._package_}}-sse-ingress) || true
+        fi
+
+  new:
+    desc: new tool
+    dir: mcproxy
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        if test -n "{{.__tool}}"
+        then TYPE="tool" ; NAME="{{.__tool}}"
+        elif test -n "{{.__resource}}"
+        then TYPE="resource" ; NAME="{{.__resource}}"
+        elif test -n "{{.__prompt}}"
+        then TYPE="prompt" ; NAME="{{.__prompt}}"
+        elif test -n "{{.__clean}}"
+        then TYPE="clean" ; NAME="{{.__clean}}"
+        fi
+        if test -n "$TYPE"
+        then 
+             export NEW_REDIS="{{.__redis}}"
+             export NEW_POSTGRES="{{.__postgres}}"
+             export NEW_MILVUS="{{.__milvus}}"
+             export NEW_S3="{{.__s3}}"
+             env | grep NEW_ 
+             uv run new.py "$TYPE" "{{._package_}}" "$NAME" "{{._description_}}"
+        else echo "Please specify --tool, --resource or --prompt"
+        fi

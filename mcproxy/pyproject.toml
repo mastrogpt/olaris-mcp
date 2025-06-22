@@ -1,0 +1,11 @@
+[project]
+name = "mcproxy"
+version = "0.1.0"
+description = "MCP Server generator and runner"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115.12",
+    "mcp[cli]>=1.6.0",
+    "requests>=2.32.3",
+]
