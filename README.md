@@ -1,6 +1,6 @@
 #  olaris-mcp
 
-An ops plugin to create  MCP servers with Apache OpenServerless.
+This is An ops plugin to create  MCP servers with Apache OpenServerless.
 
 This plugin allows to write an MCP server in a serverless way, just writing functions and publishing them to OpepServerless.
 
@@ -108,15 +108,69 @@ $ ops invoke demomcp/weather input=NotExitingCity
 }
 ```
 
-# Deploy as an MCP Server
+# Testing the  MCP Server
 
-Your MCP server is basically ready, and you can test it with the graphical inspector as follows:
+Your MCP server is now basically ready, and you can test it with the graphical inspector using:
+
+```
+ops mcp inspect demomcp
+```
+
+The inspector allows to connect to the MCP server, list tools and resources and test the behaviour.
+
 
 ![](inspect-mcpserver.png)
 
 
+In the image you can see what happens when you invoke the tool `wather` to see the wheater in Rome.
 
+# Using the MCP Server
 
+Now it is all ready to actually use the MCP server in any Chat user interface able to use an MCP server.
+
+In this example we use [5ire](https://5ire.app/) a free AI Assistant and MCP client that is an excellent host to run MCP Servers.
+
+You can install your MCP server using our `ops` cli. Check our [installation](https://openserverless.apache.org/docs/installation/download/) page to learn how to install it.
+
+Once you have installed, the whole MCP server management is a plugin you can install with
+
+```
+ops -plugin https://github.com/mastrogpt/olaris-mcp
+```
+
+You can install the MCP server developed as functions in 5ire in two steps.
+
+First you have to login to your Apache OpenServerless accout with:
+
+```
+ops ide login
+```
+
+Then you can install in 5ire with the command
+
+```
+ops mcp install demomcp --5ire
+```
+
+All done! Now access your 5ire client. 
+
+# Testing things out
+
+Let's test step by step our tool to check weather infomations.
+
+![](using-mcp-server.png)
+
+Step 1: if you ask to any chatbot for example the Weather in Rome, it will tell you that as a LLM is pretrained, he does not know
+
+Step 2: Let's open the list of availabe tools.
+
+Step 3: Here you can see all the available toos, our tool is `demomcp`, let's enable it.
+
+Step 4: Now the selected LLM wil be avale of the available tools, so just ask about the whater in Rome
+
+Step 5: You can see here what happens under the hood: it will invoke the MCP server that will in turn invoke the serverless functions and ask for the weather.
+
+Step 6. Success! Now you have extended your LLM to provide dynamic information sbaout the wheter everywhere in the world.
 
 
 
